@@ -28,12 +28,12 @@ int main()
 
 	// try to connect with wrong size and make sure it fails.
 	quicksand_connection *writer_big = NULL;
-	int64_t success3 = quicksand_connect(&writer_big, "test", -1, 32, 101, NULL);
+	int64_t success3 = quicksand_connect(&writer_big, "test", -1, 32, 257, NULL);
 	assert(success3 < 0 && !writer_big);
 
 	// delete the topic (unlink shm) and make sure it succeeds
 	quicksand_delete("test", -1);
-	int64_t success4 = quicksand_connect(&writer_big, "test", -1, 32, 101, NULL);
+	int64_t success4 = quicksand_connect(&writer_big, "test", -1, 32, 257, NULL);
 	assert(success4 == 0 && writer_big);
 
 	quicksand_disconnect(&reader, NULL);

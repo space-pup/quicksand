@@ -16,13 +16,13 @@ int main()
 {
 	signal(SIGINT, interrupt);
 	quicksand_connection *writer = NULL;
-	// quicksand_delete("test_pubsub", -1);
-	int64_t success = quicksand_connect(&writer, "test_pubsub", -1, 8, 1000000, NULL);
+	int64_t rate = 1000000; // 1 million msgs/s
+	// quicksand_delete("test_pubsub", -1);  // deletes existing (for new size)
+	int64_t success = quicksand_connect(&writer, "test_pubsub", -1, 8, rate, NULL);
 	assert(success == 0 && writer);
 
 	int32_t data = 0;
 
-	double rate = 1e6;
 	double delay = 1.0 / rate * 1e9;
 
 	while(ok) {

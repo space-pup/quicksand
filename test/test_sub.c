@@ -27,12 +27,11 @@ int main()
 	int32_t data = 0;
 	int64_t size = sizeof(data);
 	int32_t last = 0;
-	quicksand_read(reader, (uint8_t *) &data, &size);
 	while(ok) {
 		int64_t ret = quicksand_read(reader, (uint8_t *) &data, &size);
 		if(ret > -1) {
 			count += 1;
-			skipcount += (uint64_t) ((data != ((last + 1) & (32768 - 1))) & 1);
+			skipcount += (uint64_t) (data != ((last + 1) & (32768 - 1)));
 			last = data;
 		}
 

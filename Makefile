@@ -1,9 +1,9 @@
 CC := clang
 AR := llvm-ar
-CFLAGS  := -Wall -Wextra -Wpedantic -Werror -O2 -g -std=c11 -fPIC -flto \
+CFLAGS  := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
 	-fsanitize=address,undefined -fstack-protector-all -D_FORTIFY_SOURCE=3 \
 	-ffunction-sections -fdata-sections -march=native -mtune=native \
-	-I quicksand/include -g -O0
+	-I quicksand/include -g -O3
 LDFLAGS := -flto -fsanitize=address,undefined
 ARCH:=x86_64
 
