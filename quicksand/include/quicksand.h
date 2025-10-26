@@ -1,5 +1,8 @@
 #ifndef QUICKSAND_H
 #define QUICKSAND_H
+#ifdef __cplusplus // C++ compatibility
+extern "C" {
+#endif
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -93,5 +96,9 @@ void quicksand_ns_calibrate(double nanoseconds);
 // Parameters:
 // nanoseconds: amount of time to sleep or busy-loop
 void quicksand_sleep(double nanoseconds);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

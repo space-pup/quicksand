@@ -1,16 +1,14 @@
 CC := clang
 AR := llvm-ar
-CFLAGS  := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
-	-fsanitize=address,undefined -fstack-protector-all -D_FORTIFY_SOURCE=3 \
+CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
+	-fstack-protector-all -D_FORTIFY_SOURCE=3 \
 	-ffunction-sections -fdata-sections -march=native -mtune=native \
-	-I quicksand/include -g -O3
-LDFLAGS := -flto -fsanitize=address,undefined
-ARCH:=x86_64
+	-I quicksand/include -g -O3 # -fsanitize=address,undefined
+LDFLAGS := -flto # -fsanitize=address,undefined
+ARCH?=x86_64
+PREFIX?=/usr/local
 
 all: build/libquicksand.so build/libquicksand.a
-
-format:
-	clang-format -style=file -i $$(find . | grep -e '\.c$$' -e '\.h$$')
 
 build/libquicksand.so: build/quicksand_now.o build/quicksand_time.o build/quicksand.o
 	$(CC) -shared -o build/libquicksand.so \
@@ -18,7 +16,6 @@ build/libquicksand.so: build/quicksand_now.o build/quicksand_time.o build/quicks
 		build/quicksand_time.o \
 		build/quicksand.o \
 		$(LDFLAGS)
-
 
 build/libquicksand.a: build/quicksand_now.o build/quicksand_time.o build/quicksand.o
 	$(AR) rcs build/libquicksand.a \
@@ -77,5 +74,22 @@ compile_commands.json: Makefile
 	'{"directory":"$(PWD)","command":"$(CC) -o build/test/pub test/test_pub.c $(CFLAGS) build/libquicksand.a","file":"test/test_pub.c"},\n' \
 	'{"directory":"$(PWD)","command":"$(CC) -o build/test/sub test/test_sub.c $(CFLAGS) build/libquicksand.a","file":"test/test_sub.c"}\n]' \
 	> $@
+
+format:
+	clang-format -style=file -i $$(find . | grep -e '\.c$$' -e '\.h$$')
+
+install:
+	mkdir -p $(PREFIX)/lib
+	mkdir -p $(PREFIX)/include
+	install -m 0644 build/libquicksand.so $(PREFIX)/lib/
+	install -m 0644 build/libquicksand.a $(PREFIX)/lib/
+	install -m 0644 quicksand/include/quicksand.h $(PREFIX)/include/
+	sudo ldconfig
+
+uninstall:
+	rm $(PREFIX)/lib/libquicksand.so
+	rm $(PREFIX)/lib/libquicksand.a
+	rm $(PREFIX)/include/quicksand.h
+	sudo ldconfig
 
 .PHONY: format all check
