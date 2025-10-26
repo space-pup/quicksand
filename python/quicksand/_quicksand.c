@@ -1,4 +1,4 @@
-/*  quixican/_quicksand.c – thin C wrapper for libquicksand.so
+/*  quicksand/_quicksand.c – thin C wrapper for libquicksand.so
  *
  *  Purpose
  *  --------
@@ -7,8 +7,8 @@
  *    conversion
  *  • Keep the GIL released while the library runs
  *
- *  Author:  (your name)
- *  Licence: BSD‑3‑Clause
+ *  Author:  Alec Graves
+ *  Licence: AGPLv3
  */
 
 #define _DARWIN_SOURCE

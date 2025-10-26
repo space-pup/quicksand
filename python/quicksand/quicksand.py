@@ -1,6 +1,6 @@
 # quicksand/quicksand.py
 # ----------------------
-# Public, user‑friendly wrapper around the low‑level C module.
+# Public, user‑friendly wrapper around the low‑level Quicksand C module.
 # --------------------------------------------------------------------------
 
 import os
