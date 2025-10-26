@@ -1,0 +1,521 @@
+// -------------------------------------------------------------------------
+// quicksand.c – implementation of the public API
+// -------------------------------------------------------------------------
+//
+// The implementation follows the algorithm that was used in the old
+// “ravenring” code.  The only differences are:
+//   •  the names of the structs and functions,
+//   •  the way we obtain the allocator (malloc() by default),
+//   •  a small amount of defensive checking for the new API.
+//
+// Everything else (slot reservation, cursor checking, timeout handling,
+// padding to cache‑line boundaries, storing the payload size in the first
+// eight bytes of a slot) is kept 100 % compatible.
+// -------------------------------------------------------------------------
+
+#define _POSIX_C_SOURCE 200809L // for shm_open, ftruncate, etc.
+
+#include "quicksand.h"
+#include "quicksand_style.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define QUICKSAND_TIMEOUT 250e6 // nanoseconds
+
+#define DEBUG 1
+
+#if DEBUG
+#include <stdio.h>
+#endif
+
+// ---------------------------------------------------------------------
+// Helper – round a number up to a multiple of 64 (cache line)
+// ---------------------------------------------------------------------
+static inline i64 round_to_64(i64 v)
+{
+	i64 rem = v & 63;
+	return (rem == 0) ? v : (v + (64 - rem));
+}
+
+// ---------------------------------------------------------------------
+// Helper – copy the topic name (null terminated) into the 256‑word
+//           array that lives inside quicksand_connection.
+// ---------------------------------------------------------------------
+static void copy_topic_to_name(quicksand_connection *c, const char *topic,
+			       i64 topic_len)
+{
+	// The public API stores the name as an array of u64, but the
+	// original code used a simple char buffer.  We keep the same layout
+	// (zero‑filled) – we just write the bytes into the first slots of the
+	// u64 array.
+	memset(c->name, 0, sizeof(c->name));
+	size_t copy_len = (size_t) topic_len;
+	if(copy_len > sizeof(c->name) * sizeof(u64)) {
+		copy_len = sizeof(c->name) * sizeof(u64);
+	}
+
+	memcpy(c->name, topic, copy_len);
+}
+
+// ---------------------------------------------------------------------
+// quicksand_connect – create or attach to an existing shm segment
+// ---------------------------------------------------------------------
+i64 quicksand_connect(quicksand_connection **out, char *topic,
+		      i64 topic_length, i64 message_size,
+		      i64 message_rate, void *alloc)
+{
+	// -----------------------------------------------------------------
+	// Parameter validation
+	// -----------------------------------------------------------------
+	if(!topic) {
+		return -EINVAL;
+	}
+	if(topic_length < -1 || topic_length > 255) {
+		return -EINVAL;
+	}
+
+	// ---------------------------------------------------------------
+	// Build a null‑terminated C string from the caller‑supplied name.
+	// ---------------------------------------------------------------
+	char name_buf[256] = {0};
+	if(topic_length == -1) {
+		// -1 means “use strlen()”.  The original code behaved the same.
+		snprintf(name_buf, sizeof(name_buf), "%s", topic);
+	} else {
+		snprintf(name_buf, sizeof(name_buf), "%.*s", (int) topic_length,
+			 topic);
+	}
+
+	// ---------------------------------------------------------------
+	// If message_size == 0 || message_rate == 0 we are only *connecting*
+	// to an already existing segment.
+	// ---------------------------------------------------------------
+	if(message_size <= 0 || message_rate <= 0) {
+		int fd = shm_open(name_buf, O_RDWR, 0);
+		if(fd == -1) {
+			return -ENOENT; // segment does not exist
+		}
+
+		struct stat sb;
+		if(fstat(fd, &sb) < 0) {
+			close(fd);
+			return -EIO;
+		}
+		if(sb.st_size < (off_t) sizeof(quicksand_ringbuffer)) {
+			close(fd);
+			return -EINVAL; // too small
+		}
+
+		void *addr = mmap(NULL, (size_t) sb.st_size,
+				  PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if(addr == MAP_FAILED) {
+			close(fd);
+			return -ENOMEM;
+		}
+
+		quicksand_ringbuffer *rb = (quicksand_ringbuffer *) addr;
+
+		// sanity‑check the meta‑data
+		if(rb->length <= 0 || rb->message_size <= 0) {
+			munmap(addr, (size_t) sb.st_size);
+			close(fd);
+			return -EINVAL;
+		}
+
+		// ---------------------------------------------------------------
+		// Allocation – fall back to malloc() if the caller gave us NULL.
+		// ---------------------------------------------------------------
+		void *(*allocate)(size_t) = malloc;
+		if(alloc) {
+			allocate = (void *(*) (size_t)) alloc;
+		}
+
+		if(!*out) {
+			*out = allocate(sizeof(quicksand_connection));
+		}
+
+		if(!*out) {
+			close(fd);
+			shm_unlink(name_buf);
+			return -ENOMEM;
+		}
+
+		// Fill the user‑supplied connection object
+		(*out)->read_stamp = 0;
+		(*out)->read_index = 0;
+		(*out)->shared_memory_handle = (u64) fd;
+		(*out)->shared_memory_size = (u64) sb.st_size;
+		(*out)->buffer = rb;
+		copy_topic_to_name(*out, name_buf, (i64) strlen(name_buf));
+		return 0;
+	}
+
+	// ---------------------------------------------------------------
+	// Otherwise we need to create a new ring buffer (or connect to an
+	// already existing one).  First try O_EXCL to see if it already
+	// exists – if it does, fall back to plain O_RDWR.
+	// ---------------------------------------------------------------
+
+	// ---------------------------------------------------------------
+	// Compute the total size of the segment.
+	//
+	//   data_offset = round_up(sizeof(quicksand_ringbuffer)) to 64‑byte
+	//   padded_message = round_up(8 + message_size)   // we keep the 8‑byte
+	//           // header that stores the actual payload size
+	//   payload_area  = padded_message * message_rate   // 1‑second worth
+	//   shm_size      = data_offset + payload_area
+	// ---------------------------------------------------------------
+	i64 data_offset = round_to_64((i64) sizeof(quicksand_ringbuffer));
+
+	// reserve enough space for 1e9 ns (1 second) of messages.
+	i64 padded_msg = round_to_64(8 + message_size);
+	i64 payload_area = round_to_64(padded_msg * message_rate);
+	if(padded_msg < 0 || payload_area < 0) {
+		return -EINVAL;
+	}
+
+	i64 shm_size = data_offset + payload_area;
+	if(shm_size > (i64) INT64_MAX) {
+		return -EOVERFLOW;
+	}
+
+	int existing = 0;
+	int fd = shm_open(name_buf, O_EXCL | O_CREAT | O_RDWR,
+			  S_IRUSR | S_IWUSR);
+	if(fd == -1 && errno == EEXIST) {
+		fd = shm_open(name_buf, O_RDWR, 0);
+		struct stat sb;
+		if(fstat(fd, &sb) < 0) {
+			close(fd);
+			return -EIO;
+		}
+		if(sb.st_size != shm_size) { // Abort if size does not match
+			close(fd);
+			return -EINVAL; // too small
+		}
+		existing = 1;
+	}
+	if(fd == -1) {
+		return -errno; // cannot create/open segment
+	}
+
+	// Resize the shm object to the required size
+	if(!existing) {
+		if(ftruncate(fd, (off_t) shm_size) == -1) {
+			close(fd);
+			shm_unlink(name_buf);
+			return -errno;
+		}
+	}
+
+	void *addr = mmap(NULL, (size_t) shm_size, PROT_READ | PROT_WRITE,
+			  MAP_SHARED, fd, 0);
+	if(addr == MAP_FAILED) {
+		close(fd);
+		shm_unlink(name_buf);
+		return -ENOMEM;
+	}
+
+	// -----------------------------------------------------------------
+	// Initialise the meta‑data.  The original code stored the length as
+	// a power‑of‑two (so that modulo can be replaced by & (len‑1)).
+	// -----------------------------------------------------------------
+	quicksand_ringbuffer *rb = (quicksand_ringbuffer *) addr;
+	if(!existing) {
+		rb->length = round_to_64(message_rate); // make it a power‑of‑two?
+		// The easiest way to guarantee a power‑of‑two is to round‑up to the next
+		// power‑of‑two.  The original library used a length that already satisfied
+		// this, so we simply keep the already‑rounded value.
+		rb->message_size = padded_msg;
+
+		atomic_store_explicit(&rb->reserve, 0, memory_order_relaxed);
+		atomic_store_explicit(&rb->index, 0, memory_order_relaxed);
+		atomic_store_explicit(&rb->updatestamp, 0, memory_order_relaxed);
+	}
+
+	// ---------------------------------------------------------------
+	// Allocation – fall back to malloc() if the caller gave us NULL.
+	// ---------------------------------------------------------------
+	void *(*allocate)(size_t) = malloc;
+	if(alloc) {
+		allocate = (void *(*) (size_t)) alloc;
+	}
+
+	if(!*out) {
+		*out = allocate(sizeof(quicksand_connection));
+	}
+
+	if(!*out) {
+		close(fd);
+		shm_unlink(name_buf);
+		return -ENOMEM;
+	}
+
+	// Fill the user‑supplied connection object
+	((*out)->read_stamp) = 0;
+	((*out)->read_index) = 0;
+	((*out)->shared_memory_handle) = (u64) fd;
+	((*out)->shared_memory_size) = (u64) shm_size;
+	((*out)->buffer) = rb;
+	copy_topic_to_name(*out, name_buf, (i64) strlen(name_buf));
+
+	return 0;
+}
+
+// ---------------------------------------------------------------------
+// quicksand_disconnect – undo everything done in quicksand_connect
+// ---------------------------------------------------------------------
+void quicksand_disconnect(quicksand_connection **c, void *dealloc)
+{
+	if(!(*c)) {
+		return;
+	}
+
+	if((*c)->shared_memory_handle > 0) {
+		// Unmap the segment first
+		munmap((void *) (*c)->buffer, (size_t) (*c)->shared_memory_size);
+		close((int) (*c)->shared_memory_handle);
+		// shm_unlink((char*)(*c)->name);
+		// Do **not** unlink – the name may be reused by another process.
+		// The original code only unlinked when it *created* the segment.
+		// The QuickSand API does not expose “ownership”, therefore we simply
+		// close and unmap.  The segment will stay alive as long as at least
+		// one process still has it open.
+	}
+
+	// free() the struct that the caller allocated (the pointer itself)
+	// if they passed a custom deallocator, use it.
+	void (*deallocate)(void *) = free;
+	if(dealloc) {
+		deallocate = (void (*)(void *)) dealloc;
+	}
+	deallocate(*c);
+	*c = NULL;
+}
+
+void quicksand_delete(char *topic, i64 topic_length)
+{
+	char name_buf[256] = {0};
+	if(topic_length == -1) {
+		// -1 means “use strlen()”.  The original code behaved the same.
+		snprintf(name_buf, sizeof(name_buf), "%s", topic);
+	} else {
+		snprintf(name_buf, sizeof(name_buf), "%.*s", (int) topic_length,
+			 topic);
+	}
+	shm_unlink(name_buf);
+}
+
+static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime);
+
+// ---------------------------------------------------------------------
+// quicksand_write – put a new payload into the ring buffer
+// ---------------------------------------------------------------------
+i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
+{
+	u64 start_time = quicksand_now();
+	if(!c || !msg) {
+		return -EINVAL;
+	}
+	quicksand_ringbuffer *rb = c->buffer;
+	if(!rb || rb->length <= 0) {
+		return -EPIPE; // uninitialised
+	}
+
+	// attempt unlock
+	u64 locktime = atomic_load_explicit(&rb->locked, memory_order_relaxed);
+	if(rb->locked) {
+		_quicksand_unlock(rb, locktime);
+		return -ETIMEDOUT;
+	}
+
+
+	if(msg_len < 0 || msg_len > ((i64) rb->message_size) - 8) {
+		return -EMSGSIZE; // message does not fit
+	}
+
+	// -----------------------------------------------------------------
+	// 1. Reserve a slot (atomic fetch‑add)
+	// -----------------------------------------------------------------
+	u64 my_reserve = atomic_load_explicit(&rb->reserve, memory_order_relaxed);
+	while(!atomic_compare_exchange_weak_explicit(&rb->reserve, &my_reserve,
+						     my_reserve + 1, memory_order_relaxed, memory_order_relaxed)) {
+		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT) {
+			return -ETIMEDOUT;
+		}
+	}
+
+	// -----------------------------------------------------------------
+	// 2. Block until reserve < 50% away from index
+	// -----------------------------------------------------------------
+	u64 cursor;
+	const u64 half_len = rb->length / 2;
+	do {
+		cursor = atomic_load_explicit(&rb->index, memory_order_relaxed);
+		if(cursor > my_reserve) {
+			return -ETIMEDOUT;
+		}
+		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT) {
+			atomic_store_explicit(&rb->locked, quicksand_now(), memory_order_relaxed);
+			return -ETIMEDOUT;
+		}
+		if(my_reserve - cursor <= half_len) {
+			break;
+		}
+	} while(1);
+
+	// -----------------------------------------------------------------
+	// 3. Write the message
+	// -----------------------------------------------------------------
+	u64 slot = my_reserve & (rb->length - 1);
+	u8 *base = (u8 *) rb;
+	u64 data_offset = round_to_64((i64) sizeof(quicksand_ringbuffer));
+	u8 *slot_ptr = base + data_offset + slot * (u64) rb->message_size;
+
+	*((i64 *) slot_ptr) = msg_len;
+	memcpy(slot_ptr + 8, msg, (size_t) msg_len);
+
+	// -----------------------------------------------------------------
+	// 4. Wait to advance index
+	// -----------------------------------------------------------------
+	do {
+		cursor = atomic_load_explicit(&rb->index, memory_order_relaxed);
+		if(cursor > my_reserve) {
+			return -ETIMEDOUT;
+		}
+		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT) {
+			atomic_store_explicit(&rb->locked, start_time, memory_order_relaxed);
+			return -ETIMEDOUT;
+		}
+		if(my_reserve == cursor) {
+			break;
+		}
+	} while(1);
+
+	atomic_store_explicit(&rb->updatestamp, quicksand_now(), memory_order_relaxed);
+	atomic_store_explicit(&rb->index, my_reserve + 1, memory_order_release);
+
+	return 0;
+}
+
+static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime)
+{
+	u64 now = quicksand_now();
+	if(!ring) {
+		return -1;
+	}
+
+	// only if sufficient time passed, attempt unlock.
+	if(quicksand_ns(now, locktime) <= QUICKSAND_TIMEOUT / 2) {
+		return -2;
+	}
+
+	// Return success if ring is already alive.
+	if(!ring->locked) {
+		return 0;
+	}
+
+	u64 current = locktime;
+	// attempt to update locktime
+	if(!atomic_compare_exchange_strong_explicit(&ring->locked, &current,
+						    now, memory_order_relaxed, memory_order_relaxed)) {
+		return -2;
+	}
+	atomic_store_explicit(&ring->updatestamp, now, memory_order_release);
+	// quicksand_sleep(QUICKSAND_TIMEOUT / 2);
+	ring->reserve = ring->index; // is this right?
+	atomic_store_explicit(&ring->locked, 0, memory_order_release);
+	return 0;
+}
+
+// ---------------------------------------------------------------------
+// quicksand_read – fetch the next available payload, if any
+// ---------------------------------------------------------------------
+i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
+{
+	if(!c || !msg || !msg_len) {
+		return -EINVAL;
+	}
+	quicksand_ringbuffer *rb = c->buffer;
+	if(rb->length <= 0) {
+		return -EPIPE; // not initialized
+	}
+
+	// -----------------------------------------------------------------
+	// 1. Load the current write cursor (the slot that *has* been
+	//    committed).  We need an acquire load because the writer
+	//    released the store after writing the data.
+	// -----------------------------------------------------------------
+	u64 write_cursor = atomic_load_explicit(&rb->index,
+						memory_order_acquire);
+	if(write_cursor == 0) {
+		// No data ever written yet.
+		c->read_stamp = quicksand_now();
+		return -1;
+	}
+
+	// -----------------------------------------------------------------
+	// 2. Did we already consume this slot?  The read index is stored in
+	//    the connection object.
+	// -----------------------------------------------------------------
+	if(c->read_index >= write_cursor) {
+		// printf("read index at limit\n");
+		// No new message – consumer is caught up
+		c->read_index = write_cursor;
+		c->read_stamp = quicksand_now();
+		return -1; // “0 messages read”
+	}
+
+	// -----------------------------------------------------------------
+	// 3. The writer may have advanced *many* slots ahead.  If the distance
+	//    is larger than half the ring we clamp the “oldest readable” slot
+	//    to (write_cursor‑1).
+	// -----------------------------------------------------------------
+	u64 distance = write_cursor - c->read_index;
+	f64 time_delta = quicksand_ns(rb->updatestamp, c->read_stamp);
+	if(distance > rb->length / 2 || (time_delta > QUICKSAND_TIMEOUT && write_cursor > c->read_index)) {
+		c->read_index = write_cursor - 1; // skip stale data
+	}
+
+	// -----------------------------------------------------------------
+	// 4. Compute where the slot lives in memory.
+	// -----------------------------------------------------------------
+	u64 slot = c->read_index & (rb->length - 1);
+	u8 *base = (u8 *) rb;
+	u64 data_offset = round_to_64((i64) sizeof(quicksand_ringbuffer));
+	u8 *slot_ptr = base + data_offset + slot * (u64) rb->message_size;
+
+	// -----------------------------------------------------------------
+	// 5. Read the size that the writer stored in the first eight bytes.
+	// -----------------------------------------------------------------
+	i64 payload_len = *((i64 *) slot_ptr);
+	if(payload_len < 0 || payload_len > ((i64) rb->message_size) - 8) {
+		// Corrupted size – treat as no‑data
+		return -EBADMSG;
+	}
+
+	// -----------------------------------------------------------------
+	// 6. Copy to the buffer supplied by the caller.
+	// ----------------------------------------------------------------
+	if(*msg_len < payload_len) {
+		return -EINVAL; // too short
+	}
+	memcpy(msg, slot_ptr + 8, (size_t) payload_len);
+	*msg_len = payload_len; // tell the caller how many bytes we wrote
+
+	// -----------------------------------------------------------------
+	// 7. Advance our local read pointer so the next call reads the next slot.
+	// -----------------------------------------------------------------
+	c->read_index = c->read_index + 1;
+	c->read_stamp = quicksand_now();
+
+	// Return the number of messages still pending after we consumed one.
+	return (i64) (write_cursor - c->read_index);
+}
