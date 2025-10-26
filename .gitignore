@@ -1,3 +1,13 @@
+# Build
+build/
+lib/
+
+# Clang
 compile_commands.json
 .cache/
-build/
+
+
+# Python
+*.egg-info/
+__pycache__/
+*.so
