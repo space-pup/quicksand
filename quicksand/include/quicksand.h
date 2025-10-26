@@ -27,7 +27,7 @@ typedef struct {
 	uint64_t shared_memory_handle; // OS Shared memory handle
 	uint64_t shared_memory_size;   // Size of shared memory segment
 	quicksand_ringbuffer *buffer;  // Mapped ring buffer address
-	uint64_t name[256];	       // Shared memory name
+	uint8_t name[256];	       // Shared memory name
 } quicksand_connection;
 
 /// Core reading/writing

@@ -49,7 +49,7 @@ static inline i64 round_to_pow2(i64 v)
 }
 
 // --------------------------------------------------------------------
-// Helper – copy the topic name into the u64 name[] array of the connection
+// Helper – copy the topic name into the u8 name[] of connection
 // --------------------------------------------------------------------
 static void copy_topic_to_name(quicksand_connection *c,
 			       const char *topic,
@@ -57,8 +57,8 @@ static void copy_topic_to_name(quicksand_connection *c,
 {
 	memset(c->name, 0, sizeof(c->name));
 	size_t copy_len = (size_t) topic_len;
-	if(copy_len > sizeof(c->name) * sizeof(u64)) {
-		copy_len = sizeof(c->name) * sizeof(u64);
+	if(copy_len > sizeof(c->name)) {
+		copy_len = sizeof(c->name);
 	}
 	memcpy(c->name, topic, copy_len);
 }

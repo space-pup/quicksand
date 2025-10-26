@@ -63,14 +63,10 @@ static inline i64 round_to_pow2(i64 v)
 static void copy_topic_to_name(quicksand_connection *c, const char *topic,
 			       i64 topic_len)
 {
-	// The public API stores the name as an array of u64, but the
-	// original code used a simple char buffer.  We keep the same layout
-	// (zero‑filled) – we just write the bytes into the first slots of the
-	// u64 array.
 	memset(c->name, 0, sizeof(c->name));
 	size_t copy_len = (size_t) topic_len;
-	if(copy_len > sizeof(c->name) * sizeof(u64)) {
-		copy_len = sizeof(c->name) * sizeof(u64);
+	if(copy_len > sizeof(c->name)) {
+		copy_len = sizeof(c->name);
 	}
 
 	memcpy(c->name, topic, copy_len);
