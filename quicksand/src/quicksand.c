@@ -45,6 +45,18 @@ static inline i64 round_to_64(i64 v)
 }
 
 // ---------------------------------------------------------------------
+// Helper – round a number up to a power of two
+// ---------------------------------------------------------------------
+static inline i64 round_to_pow2(i64 v)
+{
+	i64 res = 1;
+	while(res < v) {
+		res = res << 1;
+	}
+	return res;
+}
+
+// ---------------------------------------------------------------------
 // Helper – copy the topic name (null terminated) into the 256‑word
 //           array that lives inside quicksand_connection.
 // ---------------------------------------------------------------------
@@ -79,6 +91,14 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 	}
 	if(topic_length < -1 || topic_length > 255) {
 		return -EINVAL;
+	}
+
+	// ---------------------------------------------------------------
+	// Allocation – fall back to malloc() if the caller gave us NULL.
+	// ---------------------------------------------------------------
+	void *(*allocate)(size_t) = malloc;
+	if(alloc) {
+		allocate = (void *(*) (size_t)) alloc;
 	}
 
 	// ---------------------------------------------------------------
@@ -129,18 +149,10 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 			return -EINVAL;
 		}
 
-		// ---------------------------------------------------------------
-		// Allocation – fall back to malloc() if the caller gave us NULL.
-		// ---------------------------------------------------------------
-		void *(*allocate)(size_t) = malloc;
-		if(alloc) {
-			allocate = (void *(*) (size_t)) alloc;
-		}
-
+		// Allocate out if null
 		if(!*out) {
 			*out = allocate(sizeof(quicksand_connection));
 		}
-
 		if(!*out) {
 			close(fd);
 			shm_unlink(name_buf);
@@ -176,7 +188,8 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 
 	// reserve enough space for 1e9 ns (1 second) of messages.
 	i64 padded_msg = round_to_64(8 + message_size);
-	i64 payload_area = round_to_64(padded_msg * message_rate);
+	i64 ring_length = round_to_pow2(message_rate);
+	i64 payload_area = padded_msg * ring_length;
 	if(padded_msg < 0 || payload_area < 0) {
 		return -EINVAL;
 	}
@@ -186,7 +199,7 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 		return -EOVERFLOW;
 	}
 
-	int existing = 0;
+	int already_exists = 0;
 	int fd = shm_open(name_buf, O_EXCL | O_CREAT | O_RDWR,
 			  S_IRUSR | S_IWUSR);
 	if(fd == -1 && errno == EEXIST) {
@@ -200,14 +213,14 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 			close(fd);
 			return -EINVAL; // too small
 		}
-		existing = 1;
+		already_exists = 1;
 	}
 	if(fd == -1) {
 		return -errno; // cannot create/open segment
 	}
 
 	// Resize the shm object to the required size
-	if(!existing) {
+	if(!already_exists) {
 		if(ftruncate(fd, (off_t) shm_size) == -1) {
 			close(fd);
 			shm_unlink(name_buf);
@@ -220,7 +233,7 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 	if(addr == MAP_FAILED) {
 		close(fd);
 		shm_unlink(name_buf);
-		return -ENOMEM;
+		return -EINVAL;
 	}
 
 	// -----------------------------------------------------------------
@@ -228,30 +241,23 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 	// a power‑of‑two (so that modulo can be replaced by & (len‑1)).
 	// -----------------------------------------------------------------
 	quicksand_ringbuffer *rb = (quicksand_ringbuffer *) addr;
-	if(!existing) {
-		rb->length = round_to_64(message_rate); // make it a power‑of‑two?
-		// The easiest way to guarantee a power‑of‑two is to round‑up to the next
-		// power‑of‑two.  The original library used a length that already satisfied
-		// this, so we simply keep the already‑rounded value.
+	if(!already_exists) {
+		rb->length = ring_length;
 		rb->message_size = padded_msg;
-
 		atomic_store_explicit(&rb->reserve, 0, memory_order_relaxed);
 		atomic_store_explicit(&rb->index, 0, memory_order_relaxed);
 		atomic_store_explicit(&rb->updatestamp, 0, memory_order_relaxed);
+	} else if(rb->length != (u64) ring_length
+		  || rb->message_size < (u64) padded_msg) {
+		close(fd);
+		shm_unlink(name_buf);
+		return -ENOMEM;
 	}
 
-	// ---------------------------------------------------------------
-	// Allocation – fall back to malloc() if the caller gave us NULL.
-	// ---------------------------------------------------------------
-	void *(*allocate)(size_t) = malloc;
-	if(alloc) {
-		allocate = (void *(*) (size_t)) alloc;
-	}
-
+	// Allocate out if null
 	if(!*out) {
 		*out = allocate(sizeof(quicksand_connection));
 	}
-
 	if(!*out) {
 		close(fd);
 		shm_unlink(name_buf);
@@ -282,12 +288,8 @@ void quicksand_disconnect(quicksand_connection **c, void *dealloc)
 		// Unmap the segment first
 		munmap((void *) (*c)->buffer, (size_t) (*c)->shared_memory_size);
 		close((int) (*c)->shared_memory_handle);
-		// shm_unlink((char*)(*c)->name);
-		// Do **not** unlink – the name may be reused by another process.
-		// The original code only unlinked when it *created* the segment.
-		// The QuickSand API does not expose “ownership”, therefore we simply
-		// close and unmap.  The segment will stay alive as long as at least
-		// one process still has it open.
+		// shm_unlink((char*)(*c)->name); // removes the buffer for future
+		// use quicksand_delete(name, namelen) instead
 	}
 
 	// free() the struct that the caller allocated (the pointer itself)
@@ -313,7 +315,39 @@ void quicksand_delete(char *topic, i64 topic_length)
 	shm_unlink(name_buf);
 }
 
-static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime);
+// ---------------------------------------------------------------------
+// internal - attempt to un-lock a stalled ringbuffer.
+// ---------------------------------------------------------------------
+static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime)
+{
+	u64 now = quicksand_now();
+	if(!ring) {
+		return -1;
+	}
+
+	// only if sufficient time passed, attempt unlock.
+	if(quicksand_ns(now, locktime) <= QUICKSAND_TIMEOUT / 2) {
+		return -2;
+	}
+
+	// Return success if ring is already alive.
+	if(!ring->locked) {
+		return 0;
+	}
+
+	u64 current = locktime;
+	// attempt to update locktime
+	if(!atomic_compare_exchange_strong_explicit(&ring->locked, &current,
+						    now, memory_order_relaxed, memory_order_relaxed)) {
+		return -2;
+	}
+	atomic_store_explicit(&ring->updatestamp, now, memory_order_release);
+	// quicksand_sleep(QUICKSAND_TIMEOUT / 2);
+	ring->reserve = ring->index; // is this right?
+	atomic_store_explicit(&ring->locked, 0, memory_order_release);
+	return 0;
+}
+
 
 // ---------------------------------------------------------------------
 // quicksand_write – put a new payload into the ring buffer
@@ -405,36 +439,6 @@ i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
 	return 0;
 }
 
-static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime)
-{
-	u64 now = quicksand_now();
-	if(!ring) {
-		return -1;
-	}
-
-	// only if sufficient time passed, attempt unlock.
-	if(quicksand_ns(now, locktime) <= QUICKSAND_TIMEOUT / 2) {
-		return -2;
-	}
-
-	// Return success if ring is already alive.
-	if(!ring->locked) {
-		return 0;
-	}
-
-	u64 current = locktime;
-	// attempt to update locktime
-	if(!atomic_compare_exchange_strong_explicit(&ring->locked, &current,
-						    now, memory_order_relaxed, memory_order_relaxed)) {
-		return -2;
-	}
-	atomic_store_explicit(&ring->updatestamp, now, memory_order_release);
-	// quicksand_sleep(QUICKSAND_TIMEOUT / 2);
-	ring->reserve = ring->index; // is this right?
-	atomic_store_explicit(&ring->locked, 0, memory_order_release);
-	return 0;
-}
-
 // ---------------------------------------------------------------------
 // quicksand_read – fetch the next available payload, if any
 // ---------------------------------------------------------------------
@@ -449,7 +453,7 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 	}
 
 	// -----------------------------------------------------------------
-	// 1. Load the current write cursor (the slot that *has* been
+	// 1. Load the current write index (the slot that *has* been
 	//    committed).  We need an acquire load because the writer
 	//    released the store after writing the data.
 	// -----------------------------------------------------------------
