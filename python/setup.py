@@ -19,7 +19,7 @@ _quicksand_ext = Extension(
     library_dirs=[str(LIB_DIR)],
     libraries=["quicksand"],                 # -> libquicksand.so
     extra_link_args=["-ldl"],                # dl tools
-    extra_compile_args=["-O3 -march=native -mtune=native"], # optimise the wrapper itself
+    extra_compile_args=["-O3", "-march=native", "-mtune=native"], # optimise the wrapper itself
 )
 
 # -----------------------------------------------------------------
