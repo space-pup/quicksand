@@ -15,7 +15,7 @@ LIB_DIR = pathlib.Path(__file__).parent / ".." / "build"
 _quicksand_ext = Extension(
     name="quicksand._quicksand",
     sources=["quicksand/_quicksand.c"],      # our thin wrapper
-    include_dirs=["../quicksand/include"],              # for quicksand.h
+    include_dirs=["../../quicksand/include"],              # for quicksand.h
     library_dirs=[str(LIB_DIR)],
     libraries=["quicksand"],                 # -> libquicksand.so
     extra_link_args=["-ldl"],                # dl tools
@@ -32,7 +32,7 @@ setup(
     author="Alec Graves",
     packages=find_packages(),
     ext_modules=[_quicksand_ext],
-    package_data={"quicksand": ["../build/libquicksand.so"]},
+    package_data={"quicksand": ["../../build/libquicksand.so"]},
     zip_safe=False,
     python_requires=">=3.9",
 )

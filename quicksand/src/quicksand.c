@@ -10,7 +10,7 @@
 //
 // Everything else (slot reservation, cursor checking, timeout handling,
 // padding to cache‑line boundaries, storing the payload size in the first
-// eight bytes of a slot) is kept 100 % compatible.
+// eight bytes of a slot) is kept 100% compatible.
 // -------------------------------------------------------------------------
 
 #define _POSIX_C_SOURCE 200809L // for shm_open, ftruncate, etc.
@@ -322,7 +322,7 @@ static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime)
 	}
 
 	// only if sufficient time passed, attempt unlock.
-	if(quicksand_ns(now, locktime) <= QUICKSAND_TIMEOUT / 2) {
+	if(quicksand_ns(now, locktime) <= QUICKSAND_TIMEOUT) {
 		return -2;
 	}
 
@@ -337,9 +337,8 @@ static i64 _quicksand_unlock(quicksand_ringbuffer *ring, u64 locktime)
 						    now, memory_order_relaxed, memory_order_relaxed)) {
 		return -2;
 	}
-	atomic_store_explicit(&ring->updatestamp, now, memory_order_release);
-	// quicksand_sleep(QUICKSAND_TIMEOUT / 2);
-	ring->reserve = ring->index; // is this right?
+	atomic_store_explicit(&ring->updatestamp, now, memory_order_relaxed);
+	ring->reserve = ring->index;
 	atomic_store_explicit(&ring->locked, 0, memory_order_release);
 	return 0;
 }
@@ -377,7 +376,7 @@ i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
 	u64 my_reserve = atomic_load_explicit(&rb->reserve, memory_order_relaxed);
 	while(!atomic_compare_exchange_weak_explicit(&rb->reserve, &my_reserve,
 						     my_reserve + 1, memory_order_relaxed, memory_order_relaxed)) {
-		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT) {
+		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT / 2) {
 			return -ETIMEDOUT;
 		}
 	}
@@ -385,21 +384,13 @@ i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
 	// -----------------------------------------------------------------
 	// 2. Block until reserve < 50% away from index
 	// -----------------------------------------------------------------
-	u64 cursor;
-	const u64 half_len = rb->length / 2;
-	do {
-		cursor = atomic_load_explicit(&rb->index, memory_order_relaxed);
-		if(cursor > my_reserve) {
-			return -ETIMEDOUT;
-		}
-		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT) {
+	while(my_reserve - atomic_load_explicit(&rb->index, memory_order_relaxed)
+	      > rb->length / 2) {
+		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT / 2) {
 			atomic_store_explicit(&rb->locked, quicksand_now(), memory_order_relaxed);
 			return -ETIMEDOUT;
 		}
-		if(my_reserve - cursor <= half_len) {
-			break;
-		}
-	} while(1);
+	}
 
 	// -----------------------------------------------------------------
 	// 3. Write the message
@@ -415,19 +406,12 @@ i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
 	// -----------------------------------------------------------------
 	// 4. Wait to advance index
 	// -----------------------------------------------------------------
-	do {
-		cursor = atomic_load_explicit(&rb->index, memory_order_relaxed);
-		if(cursor > my_reserve) {
+	while(my_reserve != atomic_load_explicit(&rb->index, memory_order_relaxed)) {
+		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT / 2) {
+			atomic_store_explicit(&rb->locked, start_time, memory_order_release);
 			return -ETIMEDOUT;
 		}
-		if(quicksand_ns(quicksand_now(), start_time) > QUICKSAND_TIMEOUT) {
-			atomic_store_explicit(&rb->locked, start_time, memory_order_relaxed);
-			return -ETIMEDOUT;
-		}
-		if(my_reserve == cursor) {
-			break;
-		}
-	} while(1);
+	}
 
 	atomic_store_explicit(&rb->updatestamp, quicksand_now(), memory_order_relaxed);
 	atomic_store_explicit(&rb->index, my_reserve + 1, memory_order_release);
@@ -444,8 +428,14 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 		return -EINVAL;
 	}
 	quicksand_ringbuffer *rb = c->buffer;
+
 	if(rb->length <= 0) {
 		return -EPIPE; // not initialized
+	}
+
+	if(c->read_stamp == 0) {
+		// first read
+		c->read_stamp = quicksand_now();
 	}
 
 	// -----------------------------------------------------------------
@@ -454,21 +444,18 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 	//    released the store after writing the data.
 	// -----------------------------------------------------------------
 	u64 write_cursor = atomic_load_explicit(&rb->index,
-						memory_order_acquire);
-	if(write_cursor == 0) {
-		// No data ever written yet.
-		c->read_stamp = quicksand_now();
-		return -1;
-	}
+						memory_order_relaxed);
 
 	// -----------------------------------------------------------------
 	// 2. Did we already consume this slot?  The read index is stored in
 	//    the connection object.
 	// -----------------------------------------------------------------
-	if(c->read_index >= write_cursor) {
+	// if(write_cursor - c->read_index > (u64) 1e18) {  // Should not happen, reader>writer
+	// 	c->read_index = write_cursor;
+	// }
+	if(c->read_index == write_cursor) {
 		// printf("read index at limit\n");
 		// No new message – consumer is caught up
-		c->read_index = write_cursor;
 		c->read_stamp = quicksand_now();
 		return -1; // “0 messages read”
 	}
@@ -480,12 +467,12 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 	// -----------------------------------------------------------------
 	u64 distance = write_cursor - c->read_index;
 	f64 time_delta = quicksand_ns(rb->updatestamp, c->read_stamp);
-	if(distance > rb->length / 2 || (time_delta > QUICKSAND_TIMEOUT && write_cursor > c->read_index)) {
+	if(distance > (rb->length / 2) || (time_delta > QUICKSAND_TIMEOUT && write_cursor > c->read_index)) {
 		c->read_index = write_cursor - 1; // skip stale data
 	}
 
 	// -----------------------------------------------------------------
-	// 4. Compute where the slot lives in memory.
+	// 4. Compute slot location
 	// -----------------------------------------------------------------
 	u64 slot = c->read_index & (rb->length - 1);
 	u8 *base = (u8 *) rb;

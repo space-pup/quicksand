@@ -2,7 +2,7 @@
 
 A multiple-reader multiple-writer communication library enabling robots to think at the speed of silicon!
 
-We have benchmarked up to four million messages per second per process on a relatively recent laptop (11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz). This library uses a lock-free shared-memory ring buffer in order to perform inter-process message passing significantly faster than other libraries.
+We have benchmarked sending over 19 million messages per second per process on a relatively modest laptop (11th Gen Intel(R) Core(TM) i7-1165G7 @ 2.80GHz). This library uses a lock-free shared-memory ring buffer in order to perform inter-process message passing significantly faster than other libraries.
 
 ## Usage - Python
 
@@ -26,7 +26,7 @@ count = 0
 start = qs.now()
 
 while True:
-    if c.read(16) is not None:
+    if c.read(16) == b"hello":
         count += 1
     dt = qs.ns(qs.now(), start)
     if dt > 1e9:
@@ -37,11 +37,13 @@ while True:
 
 Output:
 ```
-483931.71820689563 msgs/s
-483507.35573312046 msgs/s
-486753.9641683966 msgs/s
-492463.97348016815 msgs/s
 ...
+482043.9382983758 msgs/s
+909461.2433282456 msgs/s
+968853.8139800676 msgs/s
+924367.3492453861 msgs/s
+946468.9394259879 msgs/s
+965987.6290607505 msgs/s
 ```
 ## Usage - C
 
@@ -158,6 +160,7 @@ make build/test/sub
 ```
 ./build/test/pub
 ```
+
 * Terminal 3:
 ```
 ./build/test/pub
@@ -165,20 +168,33 @@ make build/test/sub
 
 Output:
 ```
-2265555.587733 msgs/s (drop: 0.001677 %)
-2249827.963072 msgs/s (drop: 0.001422 %)
-2217960.594811 msgs/s (drop: 0.001668 %)
-2285704.625659 msgs/s (drop: 0.001356 %)
-2250935.179984 msgs/s (drop: 0.001777 %)
-2286291.857240 msgs/s (drop: 0.001575 %)
-2227035.111612 msgs/s (drop: 0.001482 %)
-1882225.905305 msgs/s (drop: 0.001488 %)
-2227245.665432 msgs/s (drop: 0.001661 %)
-2270321.570664 msgs/s (drop: 0.001762 %)
-2202301.696682 msgs/s (drop: 0.002407 %)
-2282561.673411 msgs/s (drop: 0.001796 %)
-2042535.652465 msgs/s (drop: 0.002154 %)
-1921274.373430 msgs/s (drop: 0.024047 %)
+ ./build/test/sub
+995998.872512 msgs/s (drop: 0.000100 %)
+1011399.870541 msgs/s (drop: 0.000000 %)
+1012272.870429 msgs/s (drop: 0.000000 %)
+1656626.787952 msgs/s (drop: 77.852770 %)
+1997408.616498 msgs/s (drop: 97.271665 %)
+2007846.742996 msgs/s (drop: 97.716559 %)
+1999722.744035 msgs/s (drop: 97.406941 %)
+2006418.743178 msgs/s (drop: 97.510390 %)
+1997858.744274 msgs/s (drop: 97.664950 %)
+1993875.744784 msgs/s (drop: 97.394622 %)
+```
+*(Note: the Drop % calculation assumes only one publisher.)*
+
+
+
+Removing the sleep from the test_pub.c and running with only one publisher results in the following messaging rate:
+
+```
+$ ./build/test/sub
+19043470.781218 msgs/s (drop: 0.000005 %)
+18690428.803813 msgs/s (drop: 0.000000 %)
+18506879.815560 msgs/s (drop: 0.000000 %)
+18680283.804462 msgs/s (drop: 0.000000 %)
+18474634.817623 msgs/s (drop: 0.000000 %)
+18760865.799305 msgs/s (drop: 0.000000 %)
+18270097.830714 msgs/s (drop: 0.000000 %)
 ```
 
 ## Installation

@@ -14,17 +14,28 @@ int main()
 	assert(success1 == 0 && writer);
 	assert(success2 == 0 && reader);
 
-	uint8_t data_write[5] = {1, 2, 3, 4, 5};
-	quicksand_write(writer, data_write, sizeof(data_write));
+	printf("writer->buffer->index0 %ld\n", writer->buffer->index);
+	printf("reader->buffer->index0 %ld\n", reader->buffer->index);
+	uint8_t data_write1[5] = {1, 2, 3, 4, 5};
+	quicksand_write(writer, data_write1, sizeof(data_write1));
+	printf("writer->buffer->index1 %ld\n", writer->buffer->index);
+	printf("reader->buffer->index1 %ld\n", reader->buffer->index);
+	uint8_t data_write2[5] = {6, 7, 8, 9, 10};
+	quicksand_write(writer, data_write2, sizeof(data_write2));
+	printf("writer->buffer->index2 %ld\n", writer->buffer->index);
+	printf("reader->buffer->index2 %ld\n", reader->buffer->index);
 	int64_t size = 5;
-	uint8_t data_read[size];
-	int64_t ret = quicksand_read(reader, data_read, &size);
-	assert(ret == 0);
+	uint8_t data_read1[size], data_read2[size];
+	int64_t read_ret1 = quicksand_read(reader, data_read1, &size);
+	assert(read_ret1 >= 0);
+	int64_t read_ret2 = quicksand_read(reader, data_read2, &size);
+	assert(read_ret2 == 0);
 
 	for(int i = 0; i < size; i += 1) {
-		assert(data_read[i] == data_write[i]);
+		assert(data_read1[i] == data_write1[i]);
+		assert(data_read2[i] == data_write2[i]);
 	}
-	assert(quicksand_read(reader, data_read, &size) == -1);
+	assert(quicksand_read(reader, data_read1, &size) == -1);
 
 	// try to connect with wrong size and make sure it fails.
 	quicksand_connection *writer_big = NULL;

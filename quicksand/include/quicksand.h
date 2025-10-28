@@ -77,7 +77,7 @@ int64_t quicksand_read(quicksand_connection *connection, uint8_t *message,
 
 // Monotonic time stamp counter (rdtsc on x86_64)
 // Returns: current CPU timestamp counter
-uint64_t quicksand_now();
+uint64_t quicksand_now(void);
 
 // Computes elapsed nanoseconds since the start tick
 // Parameters:
@@ -96,6 +96,31 @@ void quicksand_ns_calibrate(double nanoseconds);
 // Parameters:
 // nanoseconds: amount of time to sleep or busy-loop
 void quicksand_sleep(double nanoseconds);
+
+/// Return elapsed time
+inline double quicksand_elapsed(uint64_t initial_timestamp)
+{
+	return quicksand_ns(quicksand_now(), initial_timestamp);
+}
+
+// Return number of remaining messages
+inline uint64_t quicksand_read_remaining(quicksand_connection *connection)
+{
+	return connection->read_index - connection->buffer->index;
+}
+
+// Return latest message if new messages are available.
+inline int64_t quicksand_read_latest(quicksand_connection *connection,
+				     uint8_t *message, int64_t *message_size)
+{
+	// Return last message if new messages are available
+	if(connection->read_index < connection->buffer->index) {
+		connection->read_index = connection->buffer->index - 1;
+		return quicksand_read(connection, message, message_size);
+	}
+	return -1;
+}
+
 
 #ifdef __cplusplus
 }

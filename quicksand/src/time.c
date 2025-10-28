@@ -7,18 +7,21 @@
 #include "quicksand_style.h"
 
 // static calibration value for timer
-static volatile f64 NS_PER_TICK = 0.0;
-static volatile f64 TICK_PER_NS = 0.0;
+static volatile f32 NS_PER_TICK = 0.0;
+static volatile f32 TICK_PER_NS = 0.0;
 
 extern u64 quicksand_now(void);
 
 f64 quicksand_ns(u64 final_timestamp, u64 initial_timestamp)
 {
 	if(NS_PER_TICK <= 0.0) {
-		quicksand_ns_calibrate(1e6); // delay for 1 millisecond
+		quicksand_ns_calibrate(100e3); // delay for 100 microsecond
 	}
-
-	return (final_timestamp - initial_timestamp) * NS_PER_TICK;
+	if(final_timestamp - initial_timestamp > (u64) 1e17) {
+		// Overflow because initial is larger, return netagive time.
+		return (f32) (initial_timestamp - final_timestamp) * NS_PER_TICK * -1.0f;
+	}
+	return (f32) (final_timestamp - initial_timestamp) * NS_PER_TICK;
 }
 
 // Calibrate conversion from timestamp counters to nanoseconds

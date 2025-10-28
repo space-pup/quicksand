@@ -23,6 +23,9 @@ int main(void)
 	stop = quicksand_now();
 	clock_gettime(CLOCK_MONOTONIC, &stop_ts);
 	quicksand_ns(stop, start);
+	assert(quicksand_ns(stop, start) - fabs(quicksand_ns(start, stop)) < 1e-12);
+	assert(quicksand_ns(stop, start) > 0);
+	assert(quicksand_ns(start, stop) < 0);
 
 	for(int i = 0; i < 5; i += 1) {
 		clock_gettime(CLOCK_MONOTONIC, &start_ts);
@@ -39,6 +42,7 @@ int main(void)
 
 	// printf("quicksand %f ns, unix %f ns\n", mean, mean_unix);
 
+	assert(fabs(mean - mean_unix) < 1000.0);
 	assert(fabs(mean - mean_unix) < 1000.0);
 	assert(mean_unix < 15e3);
 }

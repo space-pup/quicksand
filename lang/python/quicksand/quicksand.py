@@ -6,11 +6,12 @@
 import os
 from . import _quicksand as _c
 
+
 class QuicksandError(RuntimeError):
     pass
 
 
-class Quicksand:
+class Connection:
     """
     High‑level Python class for the quicksand API.
     """
@@ -40,10 +41,6 @@ class Quicksand:
             _c.disconnect(self._capsule)
             self._capsule = None
 
-    @staticmethod
-    def delete(topic) -> None:
-        return _c.delete(topic)
-
     # -----------------------------------------------------------------
     # Messaging primitives
     # -----------------------------------------------------------------
@@ -71,23 +68,15 @@ class Quicksand:
         # ``payload`` is a bytearray of the exact length; convert to immutable bytes.
         return bytes(payload)
 
-    # -----------------------------------------------------------------
-    # Timing helpers (optional)
-    # -----------------------------------------------------------------
-    @staticmethod
-    def now() -> int:
-        """Raw monotonic timestamp (raw TSC on x86‑64)."""
-        return _c.now()
+    def remaining(self):
+        return _c.remaining(self._capsule)
 
-    @staticmethod
-    def ns(stop: int, start: int) -> float:
-        """Convert two timestamps to elapsed nanoseconds."""
-        return _c.ns(stop, start)
+    # Support delete operation
+    def __del__(self):
+        self.close()
 
-    @staticmethod
-    def sleep(ns: float) -> None:
-        """Busy‑wait or sleep for the requested nanoseconds."""
-        _c.sleep(ns)
+    # def __len__(self):  # TODO slicing / generator?
+    #     return self.remaining()
 
     # -----------------------------------------------------------------
     # Context manager support
@@ -97,3 +86,27 @@ class Quicksand:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+
+def delete(topic: str) -> None:
+    _c.delete(topic)
+
+
+def now() -> int:
+    """Raw monotonic timestamp (raw TSC on x86‑64)."""
+    return _c.now()
+
+
+def ns(stop: int, start: int) -> float:
+    """Return nanoseconds between two time counter stamps."""
+    return _c.ns(stop, start)
+
+
+def ns_elapsed(start: int) -> float:
+    """Return nanoseconds elapsed since the provided counter stamp"""
+    return _c.ns(_c.now(), start)
+
+
+def sleep(ns: float) -> None:
+    """Busy‑wait or sleep for the requested nanoseconds."""
+    _c.sleep(ns)
