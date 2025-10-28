@@ -3,7 +3,7 @@ AR := llvm-ar
 CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
 	-fstack-protector-all -D_FORTIFY_SOURCE=3 \
 	-ffunction-sections -fdata-sections -march=native -mtune=native \
-	-I quicksand/include -g -O3 # -fsanitize=address,undefined
+	-I quicksand/include -g -O3 -ffast-math # -fsanitize=address,undefined
 LDFLAGS := -flto # -fsanitize=address,undefined
 ARCH?=x86_64
 PREFIX?=/usr/local
@@ -92,4 +92,7 @@ uninstall:
 	rm $(PREFIX)/include/quicksand.h
 	sudo ldconfig
 
-.PHONY: format all check
+clean:
+	rm -rf build
+
+.PHONY: format all check clean
