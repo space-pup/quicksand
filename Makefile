@@ -1,12 +1,22 @@
 CC := clang
 AR := llvm-ar
-CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
-	-fstack-protector-all -D_FORTIFY_SOURCE=3 \
-	-ffunction-sections -fdata-sections -march=native -mtune=native \
-	-I quicksand/include -Ofast -ffast-math # -fsanitize=address,undefined
-LDFLAGS := -flto # -fsanitize=address,undefined
+
 ARCH?=x86_64
 PREFIX?=/usr/local
+
+# Debug flags:
+# CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
+# 	-fstack-protector-all -D_FORTIFY_SOURCE=3 \
+# 	-ffunction-sections -fdata-sections -march=native -mtune=native \
+# 	-I quicksand/include -Ofast -g -ffast-math -fsanitize=address,undefined
+# LDFLAGS := -flto # -fsanitize=address,undefined
+
+# Release flags:
+CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
+	-fno-stack-protector -D_FORTIFY_SOURCE=0 \
+	-march=native -mtune=native \
+	-I quicksand/include -Ofast -ffast-math
+LDFLAGS := -flto
 
 all: build/libquicksand.so build/libquicksand.a
 
@@ -92,13 +102,14 @@ uninstall:
 	rm $(PREFIX)/include/quicksand.h
 	sudo ldconfig
 
-python: build/libquicksand.so
-	cp quicksand/include/quicksand.h lang/python/quicksand
-	cp build/libquicksand.so lang/python/quicksand
+python:
 	cd lang/python && pip install .
-	# wheel: pip wheel . --no-deps
 
 clean:
-	rm -rf build lang/python/build lang/python/*.whl lang/python/*.egg-info
+	rm -rf build \
+		lang/python/build \
+		lang/python/*.whl \
+		lang/python/*.egg-info \
+		lang/python/quicksand/*.so
 
 .PHONY: format all check clean python

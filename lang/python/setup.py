@@ -7,7 +7,7 @@ import os
 from setuptools import setup, Extension, find_packages
 
 # Repo root
-ROOT = os.path.abspath(os.path.dirname(__file__))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # -----------------------------------------------------------------
 # The compiled extension – note that we *do not* compile the library
@@ -16,12 +16,12 @@ ROOT = os.path.abspath(os.path.dirname(__file__))
 _quicksand_ext = Extension(
     name="quicksand._quicksand",
     sources=["quicksand/_quicksand.c"],            # our thin wrapper
-    include_dirs=[os.path.join(ROOT, "quicksand")],
-    library_dirs=[os.path.join(ROOT, "quicksand")],
+    include_dirs=[os.path.join(ROOT, "quicksand", "include")],
+    library_dirs=[os.path.join(ROOT, "build")],
     libraries=["quicksand"],                       # -> libquicksand.so
-    extra_link_args=["-ldl",  # dl tools
-                     "-Wl,-rpath,$ORIGIN"],  # relative linking
-    extra_compile_args=["-Os"],    # optimize for size
+    extra_link_args=["-ldl"],  # dl tools
+    # "-Wl,-rpath,$ORIGIN"],  # relative linking
+    extra_compile_args=["-O2", "-flto", "-march=native", "-mtune=native"],
 )
 
 # -----------------------------------------------------------------
@@ -34,10 +34,10 @@ setup(
     author="Alec Graves",
     packages=find_packages(),
     ext_modules=[_quicksand_ext],
-    package_data={
-        "quicksand": ["libquicksand.so"]
-    },
-    include_package_data=True,
-    zip_safe=False,
+    # package_data={
+    #     "quicksand": ["libquicksand.so"]
+    # },
+    # include_package_data=True,
+    zip_safe=True,
     python_requires=">=3.9",
 )

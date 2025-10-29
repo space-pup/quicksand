@@ -2,7 +2,7 @@
 
 A multiple-reader multiple-writer communication library enabling robots to think at the speed of silicon!
 
-We have benchmarked processing over 19 million messages per second per process on a on a 2020 laptop processor (i7-1165G7 @ 2.80GHz). This library uses a lock-free shared-memory ring buffer in order to perform inter-process message passing significantly faster than other libraries.
+We have benchmarked processing over 20 million messages per second per process on a on a 2020 laptop processor (i7-1165G7 @ 2.80GHz). This library uses a lock-free shared-memory ring buffer in order to perform inter-process message passing significantly faster than other libraries.
 
 ## Usage - Python
 
@@ -39,12 +39,13 @@ while True:
 
 Output:
 ```
-952725.222008827 msgs/s
-1479993.9828409045 msgs/s
-1465022.6357627842 msgs/s
-1443236.1460424745 msgs/s
-1438154.2595805922 msgs/s
-1445005.8260167285 msgs/s
+...
+280962.84875684226 msgs/s
+1468357.7046560177 msgs/s
+1469241.0470915001 msgs/s
+1466542.2284072656 msgs/s
+1460250.2051027175 msgs/s
+1454576.534434347 msgs/s
 ```
 
 ## Usage - C
@@ -184,13 +185,12 @@ Removing the sleep from the test_pub.c and running with only one publisher can r
 
 ```
 $ ./build/test/sub
-19043470.781218 msgs/s (drop: 0.000005 %)
-18690428.803813 msgs/s (drop: 0.000000 %)
-18506879.815560 msgs/s (drop: 0.000000 %)
-18680283.804462 msgs/s (drop: 0.000000 %)
-18474634.817623 msgs/s (drop: 0.000000 %)
-18760865.799305 msgs/s (drop: 0.000000 %)
-18270097.830714 msgs/s (drop: 0.000000 %)
+18603454.891196 msgs/s (drop: 0.000005 %)
+20161391.342656 msgs/s (drop: 0.000000 %)
+20459358.354837 msgs/s (drop: 0.000005 %)
+19552304.997248 msgs/s (drop: 0.000000 %)
+20273548.563203 msgs/s (drop: 0.000000 %)
+20429499.443235 msgs/s (drop: 0.000000 %)
 ```
 
 ## Installation
@@ -202,7 +202,7 @@ make check
 sudo make install
 ```
 
-Python install:
+Python install (after library install):
 ```
-make python
+cd lang/python && pip install .
 ```
