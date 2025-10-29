@@ -1,12 +1,13 @@
 # setup.py
 # ----------
 # Build script for the quicksand Python package.
+# Only works on linux for now.
 
-import pathlib
+import os
 from setuptools import setup, Extension, find_packages
 
-# Where the pre‑built shared library lives (relative to the root of the repo)
-LIB_DIR = pathlib.Path(__file__).parent / ".." / "build"
+# Repo root
+ROOT = os.path.abspath(os.path.dirname(__file__))
 
 # -----------------------------------------------------------------
 # The compiled extension – note that we *do not* compile the library
@@ -14,12 +15,13 @@ LIB_DIR = pathlib.Path(__file__).parent / ".." / "build"
 # -----------------------------------------------------------------
 _quicksand_ext = Extension(
     name="quicksand._quicksand",
-    sources=["quicksand/_quicksand.c"],      # our thin wrapper
-    include_dirs=["../../quicksand/include"],              # for quicksand.h
-    library_dirs=[str(LIB_DIR)],
-    libraries=["quicksand"],                 # -> libquicksand.so
-    extra_link_args=["-ldl"],                # dl tools
-    extra_compile_args=["-O3", "-march=native", "-mtune=native"], # optimise the wrapper itself
+    sources=["quicksand/_quicksand.c"],            # our thin wrapper
+    include_dirs=[os.path.join(ROOT, "quicksand")],
+    library_dirs=[os.path.join(ROOT, "quicksand")],
+    libraries=["quicksand"],                       # -> libquicksand.so
+    extra_link_args=["-ldl",  # dl tools
+                     "-Wl,-rpath,$ORIGIN"],  # relative linking
+    extra_compile_args=["-Os"],    # optimize for size
 )
 
 # -----------------------------------------------------------------
@@ -27,12 +29,15 @@ _quicksand_ext = Extension(
 # -----------------------------------------------------------------
 setup(
     name="quicksand",
-    version="0.1.0",
-    description="Python bindings for the quicksand shared‑memory ring buffer",
+    version="0.2.0",
+    description="Python bindings for the quicksand message passing library",
     author="Alec Graves",
     packages=find_packages(),
     ext_modules=[_quicksand_ext],
-    package_data={"quicksand": ["../../build/libquicksand.so"]},
+    package_data={
+        "quicksand": ["libquicksand.so"]
+    },
+    include_package_data=True,
     zip_safe=False,
     python_requires=">=3.9",
 )

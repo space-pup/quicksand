@@ -27,9 +27,8 @@ class Connection:
         :param message_rate: max msgs/sec, -1 = read from existing.
         """
         self.topic = topic
-        self.size = message_size
         self.rate = message_rate
-        self._capsule = _c.connect(
+        self._capsule, self.length, self.size = _c.connect(
             topic,
             message_size=message_size,
             message_rate=message_rate,
@@ -50,7 +49,7 @@ class Connection:
             raise QuicksandError("connection is closed")
         _c.write(self._capsule, data)
 
-    def read(self, max_size: int) -> bytes | None:
+    def read(self) -> bytes | None:
         """
         Read the next message.  Returns ``None`` if nothing is available.
         A fresh ``bytes`` object sized exactly to the payload is returned.
@@ -58,25 +57,45 @@ class Connection:
         if self._capsule is None:
             raise QuicksandError("connection is closed")
 
-        # Allocate a mutable buffer that the C code can fill.
-        buf = bytearray(max_size)
-        result = _c.read(self._capsule, buf)
+        # max_size = self.size if self.max_size is None else max_size
 
-        if result is None:
-            return None
-        payload, remaining = result
-        # ``payload`` is a bytearray of the exact length; convert to immutable bytes.
-        return bytes(payload)
+        # Allocate a mutable buffer that the C code can fill.
+        buf = bytearray(self.size)
+        return _c.read(self._capsule, buf)
+
+    def read_latest(self) -> bytes | None:
+        """
+        Read the latest new message.  Returns ``None`` if no new messages.
+        A fresh ``bytes`` object sized exactly to the payload is returned.
+        """
+        if self._capsule is None:
+            raise QuicksandError("connection is closed")
+
+        # max_size = self.size if max_size is None else max_size
+
+        # Allocate a mutable buffer that the C code can fill.
+        buf = bytearray(self.size)
+        return _c.read_latest(self._capsule, buf)
 
     def remaining(self):
+        if self._capsule is None:
+            raise QuicksandError("connection is closed")
         return _c.remaining(self._capsule)
 
     # Support delete operation
     def __del__(self):
         self.close()
 
-    # def __len__(self):  # TODO slicing / generator?
-    #     return self.remaining()
+    # Support being a generator
+    def __len__(self):
+        return self.remaining()
+
+    def __iter__(self):
+        for i in range(len(self)):
+            msg = self.read()
+            if msg is None:  # No more messages
+                return
+            yield msg
 
     # -----------------------------------------------------------------
     # Context manager support
@@ -104,7 +123,7 @@ def ns(stop: int, start: int) -> float:
 
 def ns_elapsed(start: int) -> float:
     """Return nanoseconds elapsed since the provided counter stamp"""
-    return _c.ns(_c.now(), start)
+    return _c.ns_elapsed(start)
 
 
 def sleep(ns: float) -> None:

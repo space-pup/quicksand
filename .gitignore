@@ -12,3 +12,5 @@ compile_commands.json
 __pycache__/
 *.so
 *.whl
+
+lang/*/*/quicksand.h

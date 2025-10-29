@@ -23,7 +23,7 @@
 
 #include <stdio.h>
 
-#include "quicksand.h" /* good for struct definitions */
+#include "quicksand.h" /* struct definitions */
 
 /* ---------------- 1.  symbol pointers --------------------------------------*/
 
@@ -94,10 +94,6 @@ py_quicksand_connect(PyObject *self, PyObject *args, PyObject *kwds)
 		return NULL;
 	}
 
-	// printf("topic: %s\n", topic);
-	// printf("msg_sz: %ld\n", msg_sz);
-	// printf("msg_rate: %ld\n", msg_rate);
-
 	rc = p_quicksand_connect(&conn,
 				 (char *) topic,
 				 (int64_t) topic_len,
@@ -111,8 +107,9 @@ py_quicksand_connect(PyObject *self, PyObject *args, PyObject *kwds)
 			     (long long) rc);
 		return NULL;
 	}
-
-	return capsule_from_conn(conn);
+	return Py_BuildValue("NLL", capsule_from_conn(conn),
+			     (long long) conn->buffer->length,
+			     (long long) conn->buffer->message_size);
 }
 
 static PyObject *
@@ -201,7 +198,7 @@ py_quicksand_write(PyObject *self, PyObject *args)
 }
 
 static PyObject *
-py_quicksand_read(PyObject *self, PyObject *args)
+_py_quicksand_read(PyObject *self, PyObject *args, int latest)
 {
 	PyObject *capsule, *buf_obj;
 	quicksand_connection *conn;
@@ -237,9 +234,22 @@ py_quicksand_read(PyObject *self, PyObject *args)
        written into the buffer. */
 	msg_sz = (int64_t) view.len;
 
-	rc = p_quicksand_read(conn,
-			      (uint8_t *) view.buf,
-			      &msg_sz);
+	// if latest, read only the latest available message if available
+	if(latest) {
+		if(conn->read_index < conn->buffer->index) {
+			conn->read_index = conn->buffer->index - 1;
+			rc = p_quicksand_read(conn,
+					      (uint8_t *) view.buf,
+					      &msg_sz);
+		} else {
+			rc = -1;
+		}
+	} else {
+		rc = p_quicksand_read(conn,
+				      (uint8_t *) view.buf,
+				      &msg_sz);
+	}
+
 
 	PyBuffer_Release(&view);
 
@@ -270,8 +280,20 @@ py_quicksand_read(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	/* Return a 2‑tuple (payload, remaining). */
-	return Py_BuildValue("Ni", payload, (int) remaining);
+	/* Return only the data. */
+	return Py_BuildValue("N", payload);
+}
+
+static PyObject *
+py_quicksand_read(PyObject *self, PyObject *args)
+{
+	return _py_quicksand_read(self, args, 0);
+}
+
+static PyObject *
+py_quicksand_read_latest(PyObject *self, PyObject *args)
+{
+	return _py_quicksand_read(self, args, 1);
 }
 
 /* ------------------------------ misc helpers -------------------------------*/
@@ -299,7 +321,7 @@ py_quicksand_remaining(PyObject *self, PyObject *args)
 	if(!conn) {
 		return NULL;
 	}
-	return PyLong_FromUnsignedLongLong(conn->read_index - conn->buffer->index);
+	return PyLong_FromUnsignedLongLong(conn->buffer->index - conn->read_index);
 }
 
 /* ------------------------------ timing functions -------------------------------*/
@@ -309,7 +331,6 @@ py_quicksand_now(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
 	return PyLong_FromUnsignedLongLong(p_quicksand_now());
 }
-
 
 static PyObject *
 py_quicksand_ns(PyObject *self, PyObject *args)
@@ -323,6 +344,17 @@ py_quicksand_ns(PyObject *self, PyObject *args)
 }
 
 static PyObject *
+py_quicksand_ns_elapsed(PyObject *self, PyObject *args)
+{
+	uint64_t start;
+
+	if(!PyArg_ParseTuple(args, "K", &start)) {
+		return NULL;
+	}
+	return PyFloat_FromDouble(p_quicksand_ns(p_quicksand_now(), start));
+}
+
+static PyObject *
 py_quicksand_sleep(PyObject *self, PyObject *args)
 {
 	double ns;
@@ -330,9 +362,10 @@ py_quicksand_sleep(PyObject *self, PyObject *args)
 	if(!PyArg_ParseTuple(args, "d", &ns)) {
 		return NULL;
 	}
-	Py_BEGIN_ALLOW_THREADS
+	Py_BEGIN_ALLOW_THREADS;
 	p_quicksand_sleep(ns);
-	Py_END_ALLOW_THREADS
+	Py_END_ALLOW_THREADS;
+
 	Py_RETURN_NONE;
 }
 
@@ -350,10 +383,16 @@ static PyMethodDef QuickSandMethods[] = {
 		 METH_VARARGS, "Write a bytes‑like object to the ring buffer."},
 		{"read", py_quicksand_read,
 		 METH_VARARGS, "Read a message into a mutable buffer, returning (msg, remaining)."},
+		{"read_latest", py_quicksand_read_latest,
+		 METH_VARARGS, "Read latest message into a mutable buffer, returning (msg, remaining)."},
+		{"remaining", py_quicksand_remaining,
+		 METH_VARARGS, "Return the number of unread messages"},
 		{"now", py_quicksand_now, METH_NOARGS,
 		 "Monotonic timestamp (raw cycles)."},
 		{"ns", py_quicksand_ns, METH_VARARGS,
 		 "Nanoseconds between two timestamps."},
+		{"ns_elapsed", py_quicksand_ns_elapsed, METH_VARARGS,
+		 "Nanoseconds since the provided timestamp."},
 		{"sleep", py_quicksand_sleep, METH_VARARGS,
 		 "Sleep for the given number of nanoseconds."},
 		{NULL, NULL, 0, NULL}};
