@@ -156,7 +156,7 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 		}
 
 		// Fill the user‑supplied connection object
-		(*out)->read_stamp = 0;
+		(*out)->read_stamp = quicksand_now();
 		(*out)->read_index = 0;
 		(*out)->shared_memory_handle = (u64) fd;
 		(*out)->shared_memory_size = (u64) sb.st_size;
@@ -247,7 +247,7 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 		  || rb->message_size < (u64) padded_msg) {
 		close(fd);
 		shm_unlink(name_buf);
-		return -ENOMEM;
+		return -EINVAL;
 	}
 
 	// Allocate out if null
@@ -261,7 +261,7 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 	}
 
 	// Fill the user‑supplied connection object
-	((*out)->read_stamp) = 0;
+	((*out)->read_stamp) = quicksand_now();
 	((*out)->read_index) = 0;
 	((*out)->shared_memory_handle) = (u64) fd;
 	((*out)->shared_memory_size) = (u64) shm_size;
@@ -431,11 +431,6 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 
 	if(rb->length <= 0) {
 		return -EPIPE; // not initialized
-	}
-
-	if(c->read_stamp == 0) {
-		// first read
-		c->read_stamp = quicksand_now();
 	}
 
 	// -----------------------------------------------------------------
