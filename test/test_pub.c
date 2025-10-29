@@ -31,7 +31,7 @@ int main()
 			continue;
 		}
 		data = (data + 1) & (32768 - 1); // modulo
-		quicksand_sleep(delay - quicksand_ns(quicksand_now(), start)-50);
+		quicksand_sleep(delay - quicksand_ns(quicksand_now(), start) - 50);
 	}
 
 	quicksand_disconnect(&writer, NULL);
