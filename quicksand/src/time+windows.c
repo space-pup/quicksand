@@ -1,115 +1,118 @@
-/* ==============================================================
-    quicksand_time_windows.c
-    Windows‑specific timer helpers for the quicksand API.
-    Author: Alec 2025
-   ============================================================== */
+// -----------------------------------------------------------------------
+// time+windows.c – Windows timing implementation
+// -----------------------------------------------------------------------
 
-#if defined(_WIN32) || defined(_WIN64)
-
+#define _CRT_SECURE_NO_WARNINGS
 #include <Windows.h>
-#include <inttypes.h>
-#include <stdint.h>
+#include <math.h>
 
+#include "quicksand.h"
 #include "quicksand_style.h"
 
+// static calibration value for timer
+static volatile f64 NS_PER_TICK = 0.0;
+static volatile f64 TICK_PER_NS = 0.0;
 
-/* -------------  global calibration state -----------------------------------
- */
-static volatile double NS_PER_TICK = 0.0; /* ns per counter tick            */
-static volatile double TICK_PER_NS = 0.0; /* counter ticks per ns           */
-static volatile uint64_t PERF_FREQ = 0;	  /* counter frequency (ticks/s)    */
-static volatile int initialized = 0;	  /* guard for first “now()” call */
-
-/* -------------  helpers -----------------------------------------------------
- */
-
-/* initialise the frequency (called once on first use) */
-static void init_perf_freq(void)
-{
-	if(!initialized) {
-		LARGE_INTEGER freq;
-		QueryPerformanceFrequency(&freq);
-		PERF_FREQ = (uint64_t) freq.QuadPart;
-		initialized = 1;
-	}
-}
-
-/* high‑resolution timestamp (ticks) -------------------------------------------
- */
 extern u64 quicksand_now(void);
 
-/* -------------  core public API --------------------------------------------
- */
-
-/* convert counter ticks into nanoseconds */
-f64 quicksand_ns(u64 final_tick, u64 init_tick)
+f64 quicksand_ns(u64 final_timestamp, u64 initial_timestamp)
 {
 	if(NS_PER_TICK <= 0.0) {
-		quicksand_ns_calibrate(1e6); /* calibrate for 1 ms first */
+		quicksand_ns_calibrate(1e6); // delay for 1 millisecond
 	}
-	return (u64) (((double) (final_tick - init_tick)) * NS_PER_TICK);
+	f64 dir = 1.0;
+	// If overflow, direction is reversed (initial > final)
+	if(final_timestamp - initial_timestamp > (u64) 1e15) {
+		// (swapping here generates less-insane assembly)
+		u64 tmp = initial_timestamp;
+		initial_timestamp = final_timestamp;
+		final_timestamp = tmp;
+		dir = -1.0;
+	}
+	return (f64) (final_timestamp - initial_timestamp) * NS_PER_TICK * dir;
 }
 
-/* calibrate the conversion factor from ticks → ns
- *   `nanoseconds` = desired sleep / calibration interval.
- */
+
+// Calibrate conversion from timestamp counters to nanoseconds
 void quicksand_ns_calibrate(f64 nanoseconds)
 {
-	/* 1. take a start counter value */
-	uint64_t start_tick = quicksand_now();
-	LARGE_INTEGER start_time;
-	QueryPerformanceCounter(&start_time);
+	// Save the start time
+	LARGE_INTEGER freq, start_qpc, stop_qpc, stop_qpc_2;
+	QueryPerformanceFrequency(&freq);
+	QueryPerformanceCounter(&start_qpc);
+	u64 start_tick = quicksand_now();
 
-	/* 2. sleep for the requested amount (use real sleep for >=1 ms)   */
-	if(nanoseconds >= 1e6) {
-		/* Windows sleep granularity is ~1 ms */
-		Sleep((DWORD) (nanoseconds / 1e6));
-	} else {
-		/* busy‑spin short intervals   */
-		f64 diff_ns = 0.0;
-		LARGE_INTEGER now_time, end_time;
-		while(diff_ns < nanoseconds) {
-			QueryPerformanceCounter(&now_time);
-			diff_ns = ((f64) (now_time.QuadPart - start_time.QuadPart) * 1e9)
-					/ (f64) PERF_FREQ;
+	// Sleep for the calibration time.
+	f64 sf = floor(nanoseconds * 1e-9);
+	u64 s = (u64) sf;
+	u64 ns = (u64) (nanoseconds - sf * 1e9);
+
+	// Convert to milliseconds for Sleep()
+	DWORD sleep_ms = (DWORD) (nanoseconds / 1e6);
+	if(sleep_ms > 0) {
+		Sleep(sleep_ms);
+	}
+
+	u64 elapsed_ns;
+	do { // Continue looping until desired time elapsed
+		QueryPerformanceCounter(&stop_qpc);
+		elapsed_ns = (u64) (((stop_qpc.QuadPart - start_qpc.QuadPart) * 1000000000ULL)
+				/ freq.QuadPart);
+		quicksand_now();
+	} while(elapsed_ns < (u64) nanoseconds);
+
+	// Save the stop time
+	QueryPerformanceCounter(&stop_qpc);
+	u64 end_tick = quicksand_now();
+	QueryPerformanceCounter(&stop_qpc_2);
+
+	// Compute time required to do measurement call
+	u64 measurement_ns = (u64) (((stop_qpc_2.QuadPart - stop_qpc.QuadPart) * 1000000000ULL)
+			/ freq.QuadPart);
+
+	// Compute elapsed time
+	u64 elapsed_ticks = end_tick - start_tick;
+	elapsed_ns = (u64) (((stop_qpc.QuadPart - start_qpc.QuadPart) * 1000000000ULL)
+			/ freq.QuadPart) - measurement_ns / 2;
+
+	// Update the calibration value
+	NS_PER_TICK = (f64) elapsed_ns / (f64) elapsed_ticks;
+	TICK_PER_NS = (f64) elapsed_ticks / (f64) elapsed_ns;
+}
+
+void quicksand_sleep(f64 nanoseconds)
+{
+	if(nanoseconds < 0.0) {
+		return;
+	}
+	u64 start = quicksand_now();
+	u64 end = start + (u64) (TICK_PER_NS * nanoseconds);
+	f64 threshold = (100e3);
+	u64 near_end = end - (u64) (TICK_PER_NS * threshold);
+
+	if(nanoseconds >= 1e6) { // actually sleep if over 1 ms
+		// Sleep using system timer for long durations
+		// Compute sleep duration
+		LARGE_INTEGER freq, now_qpc;
+		QueryPerformanceFrequency(&freq);
+		QueryPerformanceCounter(&now_qpc);
+
+		f64 ns_now = (f64) now_qpc.QuadPart * 1e9 / (f64) freq.QuadPart;
+		f64 ns_end = ns_now + nanoseconds - threshold;
+
+		// Convert to milliseconds and sleep
+		DWORD sleep_ms = (DWORD) ((ns_end - ns_now) / 1e6);
+		if(sleep_ms > 0) {
+			Sleep(sleep_ms);
 		}
 	}
 
-	/* 3. take an end counter value */
-	uint64_t end_tick = quicksand_now();
-	LARGE_INTEGER end_time;
-	QueryPerformanceCounter(&end_time);
-
-	/* 4. compute elapsed ticks & ms, subtract measurement overhead */
-	uint64_t elapsed_ticks = end_tick - start_tick;
-	f64 elapsed_ns = ((f64) (end_time.QuadPart - start_time.QuadPart) * 1e9)
-			/ (f64) PERF_FREQ;
-
-	/* 5. store conversion factors */
-	NS_PER_TICK = elapsed_ns / (f64) elapsed_ticks;
-	TICK_PER_NS = (f64) elapsed_ticks / elapsed_ns;
-}
-
-/* busy‑or‑system‑sleep delay */
-void quicksand_sleep(f64 nanoseconds)
-{
-	/* For < 100 µs use a tight spin‑lock so the caller gets instant accuracy. */
-	if(nanoseconds < 100e3) {
-		uint64_t start = quicksand_now();
-		uint64_t end =
-				start + (uint64_t) (nanoseconds * TICK_PER_NS);
-		while(quicksand_now() < end) {
-			/* hint to the CPU that we’re in a spin loop */
-			// _mm_pause(); // this is slow.
+	// Finish sleep using loop.
+	while(quicksand_now() < end) {
+		if(quicksand_now() < near_end) {
+			Sleep(0); // yield to other threads
+		} else {
 			continue;
 		}
-	} else {
-		/* For longer waits, use the OS sleep routine – this consumes almost no
-			CPU cycles and keeps the process nicely schedulable. */
-		DWORD ms = (DWORD) (nanoseconds * 1e-6);
-		if(ms == 0) {
-			ms = 1; /* keep at least 1ms granularity */
-		}
-		Sleep(ms);
 	}
 }
