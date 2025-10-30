@@ -43,6 +43,5 @@ int main(void)
 	// printf("quicksand %f ns, unix %f ns\n", mean, mean_unix);
 
 	assert(fabs(mean - mean_unix) < 1000.0);
-	assert(fabs(mean - mean_unix) < 1000.0);
 	assert(mean_unix < 15e3);
 }

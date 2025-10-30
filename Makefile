@@ -1,22 +1,30 @@
 CC := clang
 AR := llvm-ar
 
-ARCH?=x86_64
+# x86_64,aarch64
+ARCH?=$(shell uname -m)
 PREFIX?=/usr/local
 
-# Debug flags:
+# Debug flags
 # CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
 # 	-fstack-protector-all -D_FORTIFY_SOURCE=3 \
 # 	-ffunction-sections -fdata-sections -march=native -mtune=native \
 # 	-I quicksand/include -Ofast -g -ffast-math -fsanitize=address,undefined
-# LDFLAGS := -flto # -fsanitize=address,undefined
+# LDFLAGS := -flto -fsanitize=address,undefined
 
-# Release flags:
+# Release flags
 CFLAGS := -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -flto \
 	-fno-stack-protector -D_FORTIFY_SOURCE=0 \
-	-march=native -mtune=native \
-	-I quicksand/include -Ofast -ffast-math
+	-I quicksand/include -Ofast -ffast-math -mtune=native
 LDFLAGS := -flto
+
+ifeq ($(ARCH),x86_64)
+	CFLAGS += -march=native
+endif
+
+ifeq ($(ARCH),aarch64)
+	CFLAGS += -march=armv8-a
+endif
 
 all: build/libquicksand.so build/libquicksand.a
 
@@ -51,7 +59,8 @@ build/quicksand.o: quicksand/src/quicksand.c
 build/test/basic: build/libquicksand.a test/test_basic.c
 	mkdir -p build/test
 	$(CC) -o build/test/basic test/test_basic.c $(CFLAGS) \
-		build/libquicksand.a # (shared:) -L build -lquicksand
+		build/libquicksand.a
+		# (shared:) -L build -lquicksand
 
 build/test/time: build/libquicksand.a test/test_time.c
 	mkdir -p build/test
