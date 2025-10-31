@@ -57,7 +57,7 @@ void quicksand_ns_calibrate(f64 nanoseconds)
 	do { // Continue looping until desired time elapsed
 		QueryPerformanceCounter(&stop_qpc);
 		elapsed_ns = (u64) (((stop_qpc.QuadPart - start_qpc.QuadPart) * 1000000000ULL)
-				/ freq.QuadPart);
+				    / freq.QuadPart);
 		quicksand_now();
 	} while(elapsed_ns < (u64) nanoseconds);
 
@@ -68,12 +68,13 @@ void quicksand_ns_calibrate(f64 nanoseconds)
 
 	// Compute time required to do measurement call
 	u64 measurement_ns = (u64) (((stop_qpc_2.QuadPart - stop_qpc.QuadPart) * 1000000000ULL)
-			/ freq.QuadPart);
+				    / freq.QuadPart);
 
 	// Compute elapsed time
 	u64 elapsed_ticks = end_tick - start_tick;
 	elapsed_ns = (u64) (((stop_qpc.QuadPart - start_qpc.QuadPart) * 1000000000ULL)
-			/ freq.QuadPart) - measurement_ns / 2;
+			    / freq.QuadPart)
+			- measurement_ns / 2;
 
 	// Update the calibration value
 	NS_PER_TICK = (f64) elapsed_ns / (f64) elapsed_ticks;
