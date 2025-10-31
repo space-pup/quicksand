@@ -21,7 +21,7 @@ _quicksand_ext = Extension(
     libraries=["quicksand"],                       # -> libquicksand.so
     extra_link_args=["-ldl"],  # dl tools
     # "-Wl,-rpath,$ORIGIN"],  # relative linking
-    extra_compile_args=["-O2", "-flto", "-march=native", "-mtune=native"],
+    extra_compile_args=["-Os", "-flto", "-march=native", "-mtune=native"],
 )
 
 # -----------------------------------------------------------------
@@ -29,7 +29,7 @@ _quicksand_ext = Extension(
 # -----------------------------------------------------------------
 setup(
     name="quicksand",
-    version="0.2.0",
+    version="1.0.0",
     description="Python bindings for the quicksand message passing library",
     author="Alec Graves",
     packages=find_packages(),

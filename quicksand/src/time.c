@@ -31,7 +31,7 @@ f64 quicksand_ns(u64 final_timestamp, u64 initial_timestamp)
 
 
 // Calibrate conversion from timestamp counters to nanoseconds
-void quicksand_ns_calibrate(f64 nanoseconds)
+f64 quicksand_ns_calibrate(f64 nanoseconds)
 {
 	// Save the start time
 	struct timespec start_ts, stop_ts, stop_ts_2;
@@ -74,6 +74,7 @@ void quicksand_ns_calibrate(f64 nanoseconds)
 	// Update the calibration value
 	NS_PER_TICK = (double) elapsed_ns / (double) elapsed_ticks;
 	TICK_PER_NS = (double) elapsed_ticks / (double) elapsed_ns;
+	return NS_PER_TICK;
 }
 
 void quicksand_sleep(double nanoseconds)

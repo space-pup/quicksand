@@ -37,15 +37,14 @@ while True:
         start = qs.now()
 ```
 
-Output:
+Output (Python 3.10, Clang 14.0.0, i7-1165G7 @ 2.80GHz):
 ```
-...
-280962.84875684226 msgs/s
-1468357.7046560177 msgs/s
-1469241.0470915001 msgs/s
-1466542.2284072656 msgs/s
-1460250.2051027175 msgs/s
-1454576.534434347 msgs/s
+1136568.6862551533 msgs/s
+1524979.1982293406 msgs/s
+1536257.701024759 msgs/s
+1516702.770531038 msgs/s
+1517196.7936193675 msgs/s
+1500912.66844739 msgs/s
 ```
 
 ## Usage - C
@@ -181,7 +180,7 @@ $ ./build/test/sub
 ```
 *(Note: the Drop % calculation assumes one publisher.)*
 
-Removing the sleep from the test_pub.c and running with only one publisher can result in the following messaging rate on a 2020 laptop processor (i7-1165G7 @ 2.80GHz):
+Removing the sleep from the test_pub.c and running with only one publisher can result in the following messaging rate using Clang 14.0.0 on a 2020 laptop processor (i7-1165G7 @ 2.80GHz):
 
 ```
 $ ./build/test/sub

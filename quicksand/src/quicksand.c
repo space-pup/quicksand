@@ -35,6 +35,47 @@
 #include <stdio.h>
 #endif
 
+
+#if defined(__GNUC__) || defined(__clang__)
+    #define RESTRICT __restrict__
+#elif defined(_MSC_VER)
+    #define RESTRICT __restrict
+#else
+    #define RESTRICT
+#endif
+
+// memcpy(dest, src, bytes);
+static inline void fast_memcpy(u8* RESTRICT dest, const u8* RESTRICT src, u64 n)
+{
+	u64 i = 0;
+	for(; i + 64 <= n; i += 64) {
+		u64* dstptr = (u64*) (dest + i);
+		const u64* srcptr = (const u64*) (src + i);
+		dstptr[0] = srcptr[0];
+		dstptr[1] = srcptr[1];
+		dstptr[2] = srcptr[2];
+		dstptr[3] = srcptr[3];
+		dstptr[4] = srcptr[4];
+		dstptr[5] = srcptr[5];
+		dstptr[6] = srcptr[6];
+		dstptr[7] = srcptr[7];
+	}
+	for (; i + 32 <= n; i += 32) {
+		u64* dstptr = (u64*) (dest + i);
+		const u64* srcptr = (const u64*) (src + i);
+		dstptr[0] = srcptr[0];
+		dstptr[1] = srcptr[1];
+		dstptr[2] = srcptr[2];
+		dstptr[3] = srcptr[3];
+	}
+	for (; i + 8 <= n; i += 8) {
+		*(u64*)(dest + i) = *(const u64*)(src + i);
+	}
+	for (; i < n; i += 1) {
+		dest[i] = src[i];
+	}
+}
+
 // ---------------------------------------------------------------------
 // Helper – round a number up to a multiple of 64 (cache line)
 // ---------------------------------------------------------------------
@@ -60,16 +101,16 @@ static inline i64 round_to_pow2(i64 v)
 // Helper – copy the topic name (null terminated) into the 256‑word
 //           array that lives inside quicksand_connection.
 // ---------------------------------------------------------------------
-static void copy_topic_to_name(quicksand_connection *c, const char *topic,
+static inline void copy_topic_to_name(quicksand_connection *c, const char *topic,
 			       i64 topic_len)
 {
 	memset(c->name, 0, sizeof(c->name));
 	size_t copy_len = (size_t) topic_len;
-	if(copy_len > sizeof(c->name)) {
-		copy_len = sizeof(c->name);
+	if(copy_len >= sizeof(c->name)) {
+		copy_len = sizeof(c->name)-1; // truncate
 	}
 
-	memcpy(c->name, topic, copy_len);
+	fast_memcpy(c->name, (u8*) topic, copy_len);
 }
 
 // ---------------------------------------------------------------------
@@ -183,7 +224,8 @@ i64 quicksand_connect(quicksand_connection **out, char *topic,
 	i64 data_offset = round_to_64((i64) sizeof(quicksand_ringbuffer));
 
 	// reserve enough space for 1e9 ns (1 second) of messages.
-	i64 padded_msg = round_to_64(8 + message_size);
+	// padded = [write_timestamp] + [message_len] + [message]
+	i64 padded_msg = round_to_64(8 + 8 + message_size);
 	i64 ring_length = round_to_pow2(message_rate);
 	i64 payload_area = padded_msg * ring_length;
 	if(padded_msg < 0 || payload_area < 0) {
@@ -366,7 +408,7 @@ i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
 	}
 
 
-	if(msg_len < 0 || msg_len > ((i64) rb->message_size) - 8) {
+	if(msg_len < 0 || msg_len > ((i64) rb->message_size) - 16) {
 		return -EMSGSIZE; // message does not fit
 	}
 
@@ -400,8 +442,9 @@ i64 quicksand_write(quicksand_connection *c, u8 *msg, i64 msg_len)
 	u64 data_offset = round_to_64((i64) sizeof(quicksand_ringbuffer));
 	u8 *slot_ptr = base + data_offset + slot * (u64) rb->message_size;
 
-	*((i64 *) slot_ptr) = msg_len;
-	memcpy(slot_ptr + 8, msg, (size_t) msg_len);
+	*((u64 *) slot_ptr) = quicksand_now();
+	*((i64 *) (slot_ptr + 8)) = msg_len;
+	fast_memcpy(slot_ptr + 16, msg, msg_len);
 
 	// -----------------------------------------------------------------
 	// 4. Wait to advance index
@@ -448,10 +491,11 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 	// if(write_cursor - c->read_index > (u64) 1e18) {  // Should not happen, reader>writer
 	// 	c->read_index = write_cursor;
 	// }
+	u64 now = quicksand_now();
 	if(c->read_index == write_cursor) {
 		// printf("read index at limit\n");
 		// No new message – consumer is caught up
-		c->read_stamp = quicksand_now();
+		c->read_stamp = now;
 		return -1; // “0 messages read”
 	}
 
@@ -475,9 +519,10 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 	u8 *slot_ptr = base + data_offset + slot * (u64) rb->message_size;
 
 	// -----------------------------------------------------------------
-	// 5. Read the size that the writer stored in the first eight bytes.
+	// 5. Read the timestamp and size that the writer stored in slot
 	// -----------------------------------------------------------------
-	i64 payload_len = *((i64 *) slot_ptr);
+	// u64 payload_stamp = *((u64*) slot_ptr); // UNUSED, could do timeout?
+	i64 payload_len = *((i64 *) (slot_ptr + 8));
 	if(payload_len < 0 || payload_len > ((i64) rb->message_size) - 8) {
 		// Corrupted size – treat as no‑data
 		return -EBADMSG;
@@ -489,14 +534,15 @@ i64 quicksand_read(quicksand_connection *c, u8 *msg, i64 *msg_len)
 	if(*msg_len < payload_len) {
 		return -EINVAL; // too short
 	}
-	memcpy(msg, slot_ptr + 8, (size_t) payload_len);
+
+	fast_memcpy(msg, slot_ptr + 16, payload_len);
 	*msg_len = payload_len; // tell the caller how many bytes we wrote
 
 	// -----------------------------------------------------------------
 	// 7. Advance our local read pointer so the next call reads the next slot.
 	// -----------------------------------------------------------------
 	c->read_index = c->read_index + 1;
-	c->read_stamp = quicksand_now();
+	c->read_stamp = now;
 
 	// Return the number of messages still pending after we consumed one.
 	return (i64) (write_cursor - c->read_index);

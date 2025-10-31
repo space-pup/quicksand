@@ -89,7 +89,8 @@ double quicksand_ns(uint64_t final_timestamp, uint64_t initial_timestamp);
 // Calibrate the nanosecond timer by sleeping for the specified nanoseconds time
 // Parameters:
 // nanoseconds: amount of time to sleep while calibrating
-void quicksand_ns_calibrate(double nanoseconds);
+// Returns: number of nanoseconds per tick
+double quicksand_ns_calibrate(double nanoseconds);
 
 // Sleep for the specified number of nanoseconds.
 // Busy loops for times less than 100 microseconds.
